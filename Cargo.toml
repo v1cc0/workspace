@@ -1,0 +1,38 @@
+[package]
+name = "workspace"
+version = "0.0.1"
+edition = "2021"
+
+[dependencies]
+# --- Core ---
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["compat"] }
+futures = "0.3"
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+log = "0.4"
+env_logger = "0.10"
+toml = "0.8"
+directories = "5.0"
+clap = { version = "4.4", features = ["derive"] }
+url = "2.5"
+reqwest = { version = "0.11", features = ["rustls-tls"] }
+base64 = "0.21"
+sha2 = "0.10"
+hex = "0.4"
+percent-encoding = "2.3"
+tempfile = "3.23.0"
+quinn = "0.11"
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+rcgen = "0.13"
+bytes = "1.0"
+httparse = "1.8"
+gtk = "0.18"
+
+# --- UI ---
+dioxus = { version = "0.7.3", features = ["desktop"] }
+pulldown-cmark = "0.10"
+image = "0.24"
+wry = "0.53" 
+# Removed: dioxus-free-icons (We will use inline SVGs)
