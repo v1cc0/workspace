@@ -51,8 +51,11 @@ impl LocalProxy {
 
     pub async fn run(self) -> anyhow::Result<()> {
         let listener = TcpListener::bind(format!("127.0.0.1:{}", self.port)).await?;
-        log::info!("Local HTTP Proxy listening on 127.0.0.1:{}", self.port);
+        self.serve(listener).await
+    }
 
+    pub async fn serve(self, listener: TcpListener) -> anyhow::Result<()> {
+        log::info!("Local HTTP Proxy listening on {}", listener.local_addr()?);
         loop {
             let (socket, _) = listener.accept().await?;
             let tunnel = self.tunnel.clone();
@@ -186,11 +189,12 @@ async fn read_initial_request(socket: &mut TcpStream) -> anyhow::Result<ParsedRe
             continue;
         }
 
-        let header_len = status.unwrap();
+        let mut header_len = status.unwrap();
         let method = req.method.unwrap_or("").to_string();
         let path = req.path.unwrap_or("").to_string();
 
-        let host_header = headers
+        let host_header = req
+            .headers
             .iter()
             .find(|h| h.name.eq_ignore_ascii_case("Host"))
             .map(|h| {
@@ -200,6 +204,57 @@ async fn read_initial_request(socket: &mut TcpStream) -> anyhow::Result<ParsedRe
                     .to_string()
             })
             .filter(|h| !h.is_empty());
+
+        if !method.eq_ignore_ascii_case("CONNECT") {
+            let url = if path.starts_with("http://")
+                || path.starts_with("https://")
+                || path.starts_with("ws://")
+                || path.starts_with("wss://")
+            {
+                Some(Url::parse(&path)?)
+            } else {
+                None
+            };
+            let origin_target = url.as_ref().map_or(path.as_str(), |url| {
+                &url[url::Position::BeforePath..url::Position::AfterQuery]
+            });
+            let upgrade = req
+                .headers
+                .iter()
+                .any(|h| h.name.eq_ignore_ascii_case("Upgrade"))
+                && req.headers.iter().any(|h| {
+                    h.name.eq_ignore_ascii_case("Connection")
+                        && h.value
+                            .split(|b| *b == b',')
+                            .any(|token| token.trim_ascii().eq_ignore_ascii_case(b"upgrade"))
+                });
+            let mut forwarded = format!(
+                "{method} {origin_target} HTTP/1.{}\r\n",
+                req.version.unwrap_or(1)
+            )
+            .into_bytes();
+            for header in req.headers.iter() {
+                if header.name.eq_ignore_ascii_case("Proxy-Connection")
+                    || header.name.eq_ignore_ascii_case("Proxy-Authorization")
+                    || (!upgrade && header.name.eq_ignore_ascii_case("Connection"))
+                {
+                    continue;
+                }
+                forwarded.extend_from_slice(header.name.as_bytes());
+                forwarded.extend_from_slice(b": ");
+                forwarded.extend_from_slice(header.value);
+                forwarded.extend_from_slice(b"\r\n");
+            }
+            // One HTTP request per connection; upgraded streams stay bidirectional.
+            if !upgrade {
+                forwarded.extend_from_slice(b"Connection: close\r\n");
+            }
+            forwarded.extend_from_slice(b"\r\n");
+            let forwarded_header_len = forwarded.len();
+            forwarded.extend_from_slice(&bytes[header_len..]);
+            bytes = forwarded;
+            header_len = forwarded_header_len;
+        }
 
         break (method, path, header_len, host_header);
     };
@@ -218,7 +273,11 @@ fn target_from_request(request: &ParsedRequest) -> anyhow::Result<String> {
         return Ok(request.path.clone());
     }
 
-    if request.path.starts_with("http://") || request.path.starts_with("https://") {
+    if request.path.starts_with("http://")
+        || request.path.starts_with("https://")
+        || request.path.starts_with("ws://")
+        || request.path.starts_with("wss://")
+    {
         let url = Url::parse(&request.path)?;
         let host = url.host_str().unwrap_or("");
         if host.is_empty() {
@@ -355,6 +414,53 @@ async fn write_http_error(socket: &mut TcpStream, status: &str, body: &str) -> a
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn absolute_requests_reach_the_origin_with_path_headers_and_body() -> anyhow::Result<()> {
+        let origin = TcpListener::bind("127.0.0.1:0").await?;
+        let address = origin.local_addr()?;
+        let proxy = TcpListener::bind("127.0.0.1:0").await?;
+        let proxy_address = proxy.local_addr()?;
+        let proxy_task = tokio::spawn(LocalProxy::new(0, TunnelState::default()).serve(proxy));
+        let origin_task = tokio::spawn(async move {
+            let (mut socket, _) = origin.accept().await?;
+            let mut request = Vec::new();
+            socket.read_to_end(&mut request).await?;
+            assert!(request.starts_with(b"POST /a%2Fb?query=%E4%B8%AD HTTP/1.1\r\n"));
+            assert!(
+                request
+                    .windows(19)
+                    .any(|part| part == b"Connection: close\r\n")
+            );
+            assert!(!request.windows(16).any(|part| part == b"Proxy-Connection"));
+            assert!(
+                !request
+                    .windows(19)
+                    .any(|part| part == b"Proxy-Authorization")
+            );
+            assert!(request.ends_with(b"\r\n\r\n\x00\xff"));
+            assert!(
+                request
+                    .windows(22)
+                    .any(|part| part == b"X-Fixture: preserved\r\n")
+            );
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+                .await?;
+            anyhow::Ok(())
+        });
+        let mut client = TcpStream::connect(proxy_address).await?;
+        client.write_all(format!("POST http://{address}/a%2Fb?query=%E4%B8%AD HTTP/1.1\r\nHost: {address}\r\nX-Fixture: preserved\r\nContent-Length: 2\r\nProxy-Authorization: Basic ZHVtbXk=\r\nProxy-Connection: keep-alive\r\nConnection: keep-alive\r\n\r\n").as_bytes()).await?;
+        client.write_all(b"\x00\xff").await?;
+        client.shutdown().await?;
+        let mut response = Vec::new();
+        tokio::time::timeout(Duration::from_secs(3), client.read_to_end(&mut response)).await??;
+        assert!(response.starts_with(b"HTTP/1.1 200 OK\r\n"));
+        assert!(response.ends_with(b"\r\n\r\nok"));
+        origin_task.await??;
+        proxy_task.abort();
+        Ok(())
+    }
 
     #[tokio::test]
     async fn strict_mode_never_connects_directly_without_a_tunnel() -> anyhow::Result<()> {

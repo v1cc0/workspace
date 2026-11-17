@@ -1,6 +1,6 @@
 # NSH 迁移与独立 Workspace 服务计划
 
-状态：已保存旧源码基线并建立 NSH 编辑验证入口；P0 部分验证通过，浏览器代理、IME、keyring 与真实 Turso 集成仍待验收。
+状态：NSH Linux 编辑、真实中文 IME 与浏览器经 QUIC 的受控验证已通过；P0 仍待 NSH 批量更新缺陷处理、完整无障碍验收、持久 keyring、登录方式与真实 Turso 集成。
 
 English scope: Replace the current desktop GUI with a Rust Native Shell (NSH) application, and extract an independently buildable and deployable Rust server for authenticated QUIC tunneling and user login backed by TursoDB.
 
@@ -253,7 +253,7 @@ HTTPS 与 QUIC 的证书分别配置和续期，TLS 代理不会自动替 QUIC �
 - [Turso Rust quickstart：引擎与 SDK 对应关系](https://docs.turso.tech/sdk/rust/quickstart)
 - [Turso 数据库连接认证](https://docs.turso.tech/sdk/authentication)
 
-尚待 P0 验证：NSH 代理集成的精确 API/实现、Markdown 原生格式支持、实际浏览器路由边界、keyring 环境，以及实际 Turso 数据库引擎/SDK 事务行为。部署域名、主机和 OAuth/Turso 凭据留到集成阶段配置，规划阶段不创建外部资源。
+尚待 P0 验证：NSH 批量 Markdown 更新的行生命周期缺陷、完整键盘/读屏体验、持久 keyring 与内存回退，以及实际 Turso 数据库引擎/SDK 事务行为。浏览器的精确 API、原生 Markdown 基本格式和受控 HTTP/HTTPS/WS 路由已有下节实测证据。部署域名、主机和 OAuth/Turso 凭据留到集成阶段配置；未创建外部资源。
 
 ## 13. P0 已执行结果与剩余关卡
 
@@ -269,10 +269,14 @@ HTTPS 与 QUIC 的证书分别配置和续期，TLS 代理不会自动替 QUIC �
 | 检查 | 结果与边界 |
 | --- | --- |
 | `nsh check crates/workspace-desktop` | 通过 Rust 与 TypeScript 检查 |
-| `nsh test crates/workspace-desktop` | 两项通过：中文编辑/表格/删除线/清空重输；800×600 深色、reduced motion、80 段长文滚动后继续编辑 |
+| `nsh test crates/workspace-desktop` | 5 项通过：3 项 Rust 检查与 2 项 headless 编辑流程；需要显示会话的浏览器测试默认跳过，另行显式运行通过 |
+| `GTK_IM_MODULE=fcitx nsh test crates/workspace-desktop --target linux` | 2 项原生流程通过；输入模块缺失警告已消除 |
+| 显式运行所有 Rust 测试（含原生浏览器） | 4 项通过：URL 校验、HTTP 转发回归、无 tunnel 的 strict GET/CONNECT、真实 WebKit/QUIC 路由与断连检查 |
 | 定向 fmt / Clippy | 新 NSH crate 的 `cargo fmt --check` 与 Clippy `-D warnings` 通过；旧源码其他文件的既有格式差异未混入本轮修改 |
 | 原生 Linux 窗口 | `cargo run --manifest-path crates/workspace-desktop/Cargo.toml` 可启动；GTK 原生编辑 buffer 更新后预览能更新 |
-| 浅色/深色视觉 | 检查原生窗口自身渲染的 PNG：中文、表格、删除线、代码块、双栏对齐可见；窗口管理器将窗口平铺到 1920×2120，不能代替实际最小窗口检查。截图保存在本地忽略的 `.nsh/p0-light.png`、`.nsh/p0-dark.png` |
+| 浅色/深色与小窗口 | 原始 `.nsh/p0-light.png`、`.nsh/p0-dark.png` 可见中文、表格、删除线、代码块。新增 `.nsh/p0-ime-small.png` 是实际 800×600、150% 字号的原生窗口渲染：双栏、标题与中文输入/预览无重叠；不代表已定义产品最小窗口策略 |
+| 真实中文输入与无障碍接口 | 现有 fcitx `shuangpin`：`n` → `ni` preedit，空格提交“你”，Ctrl+Z 撤销、Ctrl+Y 重做、Shift+Left 选择通过；AT-SPI 可读中文、可编辑状态和 0–1 选择范围。完整读屏体验尚未验收 |
+| Secret Service | 临时 session collection 的测试值写入/读取/删除通过，确认测试项清理；默认持久 collection 仍锁定，未解锁或读取已有凭据 |
 | 现有代理与配置 | 将原模块按路径编入临时隔离 Cargo harness，并复用根 lockfile 已解析的依赖，6 项测试通过：5 项原有配置测试，以及新增 strict 回归；无 tunnel 时 GET/CONNECT 均返回 503，受控目标未接到直连 |
 | 完整旧桌面测试 | 受环境阻塞：缺少 `webkit2gtk-4.1` 与 `javascriptcoregtk-4.1`；隔离核心测试不能代替全程序构建 |
 
@@ -280,16 +284,19 @@ HTTPS 与 QUIC 的证书分别配置和续期，TLS 代理不会自动替 QUIC �
 
 已查看实际 `nsh-core` 的 `WebProps` 和 `nsh-platform-linux` 的 `native/web.rs`：没有代理属性，网络 session 由平台内部建立。应用自己的 Linux native component 是当前可执行方向，不修改 NSH 源码、不混用 GTK3/GTK4。
 
-已从 `webkit6 0.6.1` 源码核实 `NetworkSession::new_ephemeral`、`NetworkProxySettings::new(Some(proxy_uri), &[])`、`NetworkSession::set_proxy_settings(NetworkProxyMode::Custom, Some(&settings))` 以及 `WebView::builder().network_session(&session)`。需要在任何页面加载前配置 session，并验证 WebKit 对本机目标的绕过规则；这些是 API 核实，尚未编译或证明浏览器流量经过 QUIC。
+应用自有 GTK4 native component 已实现于 `src/browser.rs`。`NetworkSession::new_ephemeral` 与显式 HTTP 代理设置先于 WebView 创建，`src` 保留调用方 URL，只允许 HTTP/HTTPS 导航。禁用 WebRTC 和 DNS prefetch；不把 token 或页面 bridge 暴露给网页。当前编辑窗口未添加浏览器页面，组件通过原生夹具验证。
 
-系统仓库提供 `webkitgtk-6.0 2.54.2-1`，当前未安装。`nsh test --target linux` 的开发宿主默认启用 WebView，也因此构建失败；不带 WebView 的独立 Rust runner 已实测能运行。
+`tests/browser_proxy.rs` 使用现有 `src/backend.rs`、本机 QUIC 与仅允许夹具目标的 TCP 出口。实测 HTTP/HTTPS、重定向、CSS、SVG、脚本、fetch、WS/WSS 全部经过 QUIC；loopback URL 也没有绕过代理。服务端关闭 QUIC 后仍保留旧连接对象，再次请求 HTTP/HTTPS 时源站新增 TCP 连接数为零；停止本地代理后同样没有直连。测试 TLS 仅信任该临时 session 中的夹具证书和主机名，不修改系统信任或生产校验。
+
+浏览器实测暴露并修正了共享代理的 HTTP/WS absolute-form 转发缺陷：转为源站需要的 origin-form，保留正文与 Upgrade，去掉 Proxy-Connection/Proxy-Authorization，普通 HTTP 使用一请求一连接。直连回退 POST 回归同时检查编码路径/查询、二进制正文和自定义头。此验证不代表系统全流量路由或公网服务安全验收。
+
+用户已安装 `webkitgtk-6.0 2.54.2` 与 `fcitx5-gtk`。该 GTK 输入模块使用进程级 `GTK_IM_MODULE=fcitx`，原环境的 `fcitx5` 名称不适用；本轮未更改全局环境。
 
 ### 剩余关卡
 
-1. 准备 WebKitGTK 6 开发库，再实现 native component，实测 HTTP/HTTPS、重定向、子资源、WebSocket 及 QUIC 断开后的 strict 路径；现有回归只证明无 tunnel 状态下代理不直连。
-2. 处理实际环境的 `No IM module matching GTK_IM_MODULE=fcitx5 found`：本机未安装 `fcitx5-gtk`，系统仓库提供 5.1.7-1；当前进程环境为 `GTK_IM_MODULE=fcitx5`，模块安装后还需核实正确模块名。检查真实中文组合输入、选择、撤销、键盘和屏幕阅读器；注入中文字符串不算 IME 通过。
-3. 追查 NSH 0.5.1 在逐字编辑表格时出现的 `a kept row is gone`（源自 `nsh-core/src/core/components.rs`）；最终内容断言通过，暂不能排除中间帧异常。
-4. Secret Service 在线，但默认 collection 的 `Locked` 为 true；未触发解锁、读写已有凭据。仍须验证 keyring 写入/读取/清理，以及不可用时仅保留内存会话。
-5. 确认 GitHub OAuth 是否作为首版登录方式，并确认实际 Turso 数据库引擎。环境无 `TURSO_*` / OAuth 集成变量，未连接真实数据库。已重新核对官方 SDK 分流；`turso_serverless` 当前稳定版为 `0.1.3`，事务/并发一次性消费必须用选定引擎实测，尚不选择驱动或引入两套实现。
+1. NSH 0.5.1 的 `a kept row is gone` 已在独立 `input + TextView` 夹具复现：一次连续输入产生 5 条错误；每字符等待后输入为 0。线索在 `element/flow.rs::keep_row`：保留行没有附带 owner，队列中的过时 Keep 在行 owner 释放后仍进入 reconciliation。在临时 NSH 副本中为 Keep 附带行 owner 后，同一连续输入测试为 0 错误且内容断言通过。本地候选补丁在 `.nsh/p0-keep-row-candidate.patch`；尚未通过 NSH 全套回归或评估每行快路径的性能影响，不直接修改已安装包、不引入 vendor/fork。现有 headless 测试仍保留警告，P0 不据此宣称完全通过。
+2. 已验证真实组合输入、撤销/重做、选择与 AT-SPI 文本；继续完整键盘遍历、读屏使用和原生 reduced-motion 切换验收。Ctrl+Shift+Z 本机未触发重做，Ctrl+Y 可用；记录平台实际快捷键。
+3. 默认持久 Secret Service collection 的 `Locked` 为 true。session collection 的测试值生命周期已验证；仍需以选定会话模块/SDK 验证持久凭据和不可用时的内存回退。临时 collection 成功不代表跨应用重启持久化通过。
+4. 确认 GitHub OAuth 是否作为首版登录方式，并确认实际 Turso 数据库引擎。环境无 `TURSO_*` / OAuth 集成变量，未连接真实数据库。已核对官方 SDK 分流；`turso_serverless` 稳定版为 `0.1.3`，事务/并发一次性消费必须用选定引擎实测，尚不选择驱动或引入两套实现。
 
-P0 尚未整体通过；本轮未创建外部数据库/OAuth 资源、未安装系统依赖、未开始公网部署。
+P0 尚未整体通过；本轮未创建外部数据库/OAuth 资源、未推送或开始公网部署。P1 workspace/协议/服务拆分等待上述关卡处理。

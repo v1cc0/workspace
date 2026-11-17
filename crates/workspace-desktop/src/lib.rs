@@ -1,5 +1,7 @@
 //! Workspace's Rust NSH desktop entry.
 
+#[cfg(target_os = "linux")]
+pub mod browser;
 mod ui;
 
 use nsh_base::theme;
