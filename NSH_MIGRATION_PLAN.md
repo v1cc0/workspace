@@ -1,6 +1,6 @@
 # NSH 迁移与独立 Workspace 服务计划
 
-状态：规划完成，尚未开始业务代码迁移。
+状态：已保存旧源码基线并建立 NSH 编辑验证入口；P0 部分验证通过，浏览器代理、IME、keyring 与真实 Turso 集成仍待验收。
 
 English scope: Replace the current desktop GUI with a Rust Native Shell (NSH) application, and extract an independently buildable and deployable Rust server for authenticated QUIC tunneling and user login backed by TursoDB.
 
@@ -32,9 +32,9 @@ English scope: Replace the current desktop GUI with a Rust Native Shell (NSH) ap
 | `src/config.rs` | 原子保存配置；支持 IP/端口及 CLI、环境变量覆盖；已有测试 | 保留原子写入与覆盖顺序，增加 HTTPS API URL、QUIC 主机名和旧配置迁移 |
 | `src/ui/mod.rs::SettingsView` | 已有可保存的设置页，重启应用生效 | 原进度文件中的“设置页仍为空”已过时，迁移要保留现有能力 |
 
-尚无登录、数据库、数据库迁移和部署配置。Git 当前没有提交，现有代码全部未跟踪，也未配置提交作者姓名和邮箱。
+尚无登录、数据库、数据库迁移和部署配置。规划时 Git 尚无提交；现已使用配置好的作者身份分别提交计划（`85f454b`）和现有源码基线（`03c13ab`）。本地笔记、配置、agent 说明与进度文件不纳入 Git。
 
-本机有 NSH `0.5.1`，上游 latest release 也为 `0.5.1`；GTK4 为 `4.24.1`。`pkg-config` 未找到 `webkitgtk-6.0`，因此当前环境尚不满足 Linux WebView 的构建验证条件。本轮未安装依赖或运行 NSH 示例。
+本机有 NSH `0.5.1`，重新核实上游 latest release 仍为 `0.5.1`；GTK4 为 `4.24.1`。`pkg-config` 未找到 `webkitgtk-6.0`，因此当前环境尚不满足 Linux WebView 的构建验证条件。P0 已能构建和启动不带 WebView 的 NSH Rust 窗口，具体结果见第 13 节。
 
 ## 3. 架构与依赖方向
 
@@ -213,7 +213,7 @@ Turso 查询发生在连接鉴权和周期复核，不在每个转发字节上�
 
 P1/P2 的中间版本只用于本地或隔离环境；在 P3 鉴权、证书与出口限制通过前不开放公网。旧客户端不会兼容新认证协议，需明确版本拒绝和配套升级，不能临时开放匿名连接来兼容。
 
-首先实施的具体小任务是 P0：建立可回退基线、做最小 NSH 编辑/代理验证、确认登录方式与 Turso 连接行为。当前规划文档不创建这些实现文件。
+首先实施的具体小任务是 P0：建立可回退基线、做最小 NSH 编辑/代理验证、确认登录方式与 Turso 连接行为。基线和编辑验证入口已建立，P1 仍以 P0 剩余关卡通过为前提。
 
 ## 10. 必要测试与交付证据
 
@@ -254,3 +254,42 @@ HTTPS 与 QUIC 的证书分别配置和续期，TLS 代理不会自动替 QUIC �
 - [Turso 数据库连接认证](https://docs.turso.tech/sdk/authentication)
 
 尚待 P0 验证：NSH 代理集成的精确 API/实现、Markdown 原生格式支持、实际浏览器路由边界、keyring 环境，以及实际 Turso 数据库引擎/SDK 事务行为。部署域名、主机和 OAuth/Turso 凭据留到集成阶段配置，规划阶段不创建外部资源。
+
+## 13. P0 已执行结果与剩余关卡
+
+### 已建立的基线与入口
+
+- 计划与旧源码已分别提交，旧 Dioxus/GTK3 入口可单独回退；源码基线为 `03c13ab`。
+- `crates/workspace-desktop` 来自官方 `nsh init --template rust`，保留 manifest、native module、root 与平台 runner 接线；NSH CLI/crates 均为当前稳定版 `0.5.1`。
+- 该 crate 暂时保留独立 `[workspace]`，在 P1 才合并根 Cargo workspace；它不替换原桌面入口。
+- 实现受控原生多行输入与原生 `TextView` Markdown 预览，已有语义主题和应用自有 `ui` 层。草稿仅在内存中；不读取或写入 `notes/`。预览链接只报告，图片以文字代替，避免验证窗口主动加载远端资源。
+
+### 验证证据
+
+| 检查 | 结果与边界 |
+| --- | --- |
+| `nsh check crates/workspace-desktop` | 通过 Rust 与 TypeScript 检查 |
+| `nsh test crates/workspace-desktop` | 两项通过：中文编辑/表格/删除线/清空重输；800×600 深色、reduced motion、80 段长文滚动后继续编辑 |
+| 定向 fmt / Clippy | 新 NSH crate 的 `cargo fmt --check` 与 Clippy `-D warnings` 通过；旧源码其他文件的既有格式差异未混入本轮修改 |
+| 原生 Linux 窗口 | `cargo run --manifest-path crates/workspace-desktop/Cargo.toml` 可启动；GTK 原生编辑 buffer 更新后预览能更新 |
+| 浅色/深色视觉 | 检查原生窗口自身渲染的 PNG：中文、表格、删除线、代码块、双栏对齐可见；窗口管理器将窗口平铺到 1920×2120，不能代替实际最小窗口检查。截图保存在本地忽略的 `.nsh/p0-light.png`、`.nsh/p0-dark.png` |
+| 现有代理与配置 | 将原模块按路径编入临时隔离 Cargo harness，并复用根 lockfile 已解析的依赖，6 项测试通过：5 项原有配置测试，以及新增 strict 回归；无 tunnel 时 GET/CONNECT 均返回 503，受控目标未接到直连 |
+| 完整旧桌面测试 | 受环境阻塞：缺少 `webkit2gtk-4.1` 与 `javascriptcoregtk-4.1`；隔离核心测试不能代替全程序构建 |
+
+### 浏览器集成的确定方向
+
+已查看实际 `nsh-core` 的 `WebProps` 和 `nsh-platform-linux` 的 `native/web.rs`：没有代理属性，网络 session 由平台内部建立。应用自己的 Linux native component 是当前可执行方向，不修改 NSH 源码、不混用 GTK3/GTK4。
+
+已从 `webkit6 0.6.1` 源码核实 `NetworkSession::new_ephemeral`、`NetworkProxySettings::new(Some(proxy_uri), &[])`、`NetworkSession::set_proxy_settings(NetworkProxyMode::Custom, Some(&settings))` 以及 `WebView::builder().network_session(&session)`。需要在任何页面加载前配置 session，并验证 WebKit 对本机目标的绕过规则；这些是 API 核实，尚未编译或证明浏览器流量经过 QUIC。
+
+系统仓库提供 `webkitgtk-6.0 2.54.2-1`，当前未安装。`nsh test --target linux` 的开发宿主默认启用 WebView，也因此构建失败；不带 WebView 的独立 Rust runner 已实测能运行。
+
+### 剩余关卡
+
+1. 准备 WebKitGTK 6 开发库，再实现 native component，实测 HTTP/HTTPS、重定向、子资源、WebSocket 及 QUIC 断开后的 strict 路径；现有回归只证明无 tunnel 状态下代理不直连。
+2. 处理实际环境的 `No IM module matching GTK_IM_MODULE=fcitx5 found`：本机未安装 `fcitx5-gtk`，系统仓库提供 5.1.7-1；当前进程环境为 `GTK_IM_MODULE=fcitx5`，模块安装后还需核实正确模块名。检查真实中文组合输入、选择、撤销、键盘和屏幕阅读器；注入中文字符串不算 IME 通过。
+3. 追查 NSH 0.5.1 在逐字编辑表格时出现的 `a kept row is gone`（源自 `nsh-core/src/core/components.rs`）；最终内容断言通过，暂不能排除中间帧异常。
+4. Secret Service 在线，但默认 collection 的 `Locked` 为 true；未触发解锁、读写已有凭据。仍须验证 keyring 写入/读取/清理，以及不可用时仅保留内存会话。
+5. 确认 GitHub OAuth 是否作为首版登录方式，并确认实际 Turso 数据库引擎。环境无 `TURSO_*` / OAuth 集成变量，未连接真实数据库。已重新核对官方 SDK 分流；`turso_serverless` 当前稳定版为 `0.1.3`，事务/并发一次性消费必须用选定引擎实测，尚不选择驱动或引入两套实现。
+
+P0 尚未整体通过；本轮未创建外部数据库/OAuth 资源、未安装系统依赖、未开始公网部署。

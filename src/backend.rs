@@ -152,7 +152,7 @@ async fn send_target_and_wait_ack(
     if target_bytes.len() > 1024 {
         anyhow::bail!("Target address too long: {}", target_bytes.len());
     }
-    
+
     let len = (target_bytes.len() as u16).to_be_bytes();
     tokio::time::timeout(TUNNEL_ACK_TIMEOUT, send.write_all(&len)).await??;
     tokio::time::timeout(TUNNEL_ACK_TIMEOUT, send.write_all(target_bytes)).await??;
@@ -193,7 +193,12 @@ async fn read_initial_request(socket: &mut TcpStream) -> anyhow::Result<ParsedRe
         let host_header = headers
             .iter()
             .find(|h| h.name.eq_ignore_ascii_case("Host"))
-            .map(|h| std::str::from_utf8(h.value).unwrap_or("").trim().to_string())
+            .map(|h| {
+                std::str::from_utf8(h.value)
+                    .unwrap_or("")
+                    .trim()
+                    .to_string()
+            })
             .filter(|h| !h.is_empty());
 
         break (method, path, header_len, host_header);
@@ -280,13 +285,18 @@ async fn proxy_direct(
     request: ParsedRequest,
     target: &str,
 ) -> anyhow::Result<()> {
-    let connect_res = tokio::time::timeout(UPSTREAM_CONNECT_TIMEOUT, TcpStream::connect(target)).await;
+    let connect_res =
+        tokio::time::timeout(UPSTREAM_CONNECT_TIMEOUT, TcpStream::connect(target)).await;
     let upstream = match connect_res {
         Ok(Ok(s)) => s,
         Ok(Err(e)) => {
             let mut client_socket = client_socket;
-            write_http_error(&mut client_socket, "502 Bad Gateway", &format!("Connect failed: {e}"))
-                .await?;
+            write_http_error(
+                &mut client_socket,
+                "502 Bad Gateway",
+                &format!("Connect failed: {e}"),
+            )
+            .await?;
             return Ok(());
         }
         Err(_) => {
@@ -331,11 +341,7 @@ async fn proxy_direct(
     Ok(())
 }
 
-async fn write_http_error(
-    socket: &mut TcpStream,
-    status: &str,
-    body: &str,
-) -> anyhow::Result<()> {
+async fn write_http_error(socket: &mut TcpStream, status: &str, body: &str) -> anyhow::Result<()> {
     let body_bytes = body.as_bytes();
     let headers = format!(
         "HTTP/1.1 {status}\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
@@ -344,4 +350,41 @@ async fn write_http_error(
     socket.write_all(headers.as_bytes()).await?;
     socket.write_all(body_bytes).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn strict_mode_never_connects_directly_without_a_tunnel() -> anyhow::Result<()> {
+        for method in ["GET", "CONNECT"] {
+            let upstream = std::net::TcpListener::bind("127.0.0.1:0")?;
+            upstream.set_nonblocking(true)?;
+            let target = upstream.local_addr()?;
+            let request = if method == "CONNECT" {
+                format!("CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n\r\n")
+            } else {
+                format!("GET http://{target}/probe HTTP/1.1\r\nHost: {target}\r\n\r\n")
+            };
+            let listener = TcpListener::bind("127.0.0.1:0").await?;
+            let mut client = TcpStream::connect(listener.local_addr()?).await?;
+            let handler = tokio::spawn(async move {
+                let (socket, _) = listener.accept().await?;
+                handle_proxy_conn(socket, TunnelState::default(), false).await
+            });
+            client.write_all(request.as_bytes()).await?;
+            let mut response = String::new();
+            tokio::time::timeout(Duration::from_secs(2), client.read_to_string(&mut response))
+                .await??;
+            handler.await??;
+            assert!(response.starts_with("HTTP/1.1 503 Service Unavailable"));
+            assert_eq!(
+                upstream.accept().unwrap_err().kind(),
+                std::io::ErrorKind::WouldBlock,
+                "{method} bypassed the disconnected tunnel"
+            );
+        }
+        Ok(())
+    }
 }
