@@ -1,6 +1,6 @@
 # NSH 迁移与独立 Workspace 服务计划
 
-状态：NSH Linux 编辑、真实中文 IME 与浏览器经 QUIC 的受控验证已通过；P0 仍待 NSH 批量更新缺陷处理、完整无障碍验收、持久 keyring、登录方式与真实 Turso 集成。
+状态：NSH Linux 编辑、真实中文 IME、键盘预览、浏览器经 QUIC 与隔离持久 keyring 探针已验证。P0 仍待 NSH 批量更新缺陷、完整读屏、应用会话接入、登录方式与真实 Turso 验证。
 
 English scope: Replace the current desktop GUI with a Rust Native Shell (NSH) application, and extract an independently buildable and deployable Rust server for authenticated QUIC tunneling and user login backed by TursoDB.
 
@@ -34,7 +34,7 @@ English scope: Replace the current desktop GUI with a Rust Native Shell (NSH) ap
 
 尚无登录、数据库、数据库迁移和部署配置。规划时 Git 尚无提交；现已使用配置好的作者身份分别提交计划（`85f454b`）和现有源码基线（`03c13ab`）。本地笔记、配置、agent 说明与进度文件不纳入 Git。
 
-本机有 NSH `0.5.1`，重新核实上游 latest release 仍为 `0.5.1`；GTK4 为 `4.24.1`。`pkg-config` 未找到 `webkitgtk-6.0`，因此当前环境尚不满足 Linux WebView 的构建验证条件。P0 已能构建和启动不带 WebView 的 NSH Rust 窗口，具体结果见第 13 节。
+最初验证使用 NSH `0.5.1`，当时缺少 WebKitGTK 6。当前已安装 GTK4 `4.24.1` 与 WebKitGTK `2.54.2`，桌面 crate 已升级到官方 NSH `0.6.0`，并用匹配的 CLI 重跑验证。具体结果见第 13 节。
 
 ## 3. 架构与依赖方向
 
@@ -253,14 +253,14 @@ HTTPS 与 QUIC 的证书分别配置和续期，TLS 代理不会自动替 QUIC �
 - [Turso Rust quickstart：引擎与 SDK 对应关系](https://docs.turso.tech/sdk/rust/quickstart)
 - [Turso 数据库连接认证](https://docs.turso.tech/sdk/authentication)
 
-尚待 P0 验证：NSH 批量 Markdown 更新的行生命周期缺陷、完整键盘/读屏体验、持久 keyring 与内存回退，以及实际 Turso 数据库引擎/SDK 事务行为。浏览器的精确 API、原生 Markdown 基本格式和受控 HTTP/HTTPS/WS 路由已有下节实测证据。部署域名、主机和 OAuth/Turso 凭据留到集成阶段配置；未创建外部资源。
+尚待 P0：处理 NSH 批量 Markdown 更新的行生命周期缺陷；实测完整读屏和应用会话回退；确认登录方式及实际 Turso 引擎与事务行为。浏览器的精确 API、原生 Markdown 基本格式和受控 HTTP/HTTPS/WS 路由已有下节实测证据。部署域名、主机和 OAuth/Turso 凭据留到集成阶段配置；未创建外部资源。
 
 ## 13. P0 已执行结果与剩余关卡
 
 ### 已建立的基线与入口
 
 - 计划与旧源码已分别提交，旧 Dioxus/GTK3 入口可单独回退；源码基线为 `03c13ab`。
-- `crates/workspace-desktop` 来自官方 `nsh init --template rust`，保留 manifest、native module、root 与平台 runner 接线；NSH CLI/crates 均为当前稳定版 `0.5.1`。
+- `crates/workspace-desktop` 来自官方 `nsh init --template rust`，保留 manifest、native module、root 与平台 runner 接线；项目 crates 和本轮验证使用的 CLI 均为稳定版 `0.6.0`。
 - 该 crate 暂时保留独立 `[workspace]`，在 P1 才合并根 Cargo workspace；它不替换原桌面入口。
 - 实现受控原生多行输入与原生 `TextView` Markdown 预览，已有语义主题和应用自有 `ui` 层。草稿仅在内存中；不读取或写入 `notes/`。预览链接只报告，图片以文字代替，避免验证窗口主动加载远端资源。
 
@@ -276,7 +276,8 @@ HTTPS 与 QUIC 的证书分别配置和续期，TLS 代理不会自动替 QUIC �
 | 原生 Linux 窗口 | `cargo run --manifest-path crates/workspace-desktop/Cargo.toml` 可启动；GTK 原生编辑 buffer 更新后预览能更新 |
 | 浅色/深色与小窗口 | 原始 `.nsh/p0-light.png`、`.nsh/p0-dark.png` 可见中文、表格、删除线、代码块。新增 `.nsh/p0-ime-small.png` 是实际 800×600、150% 字号的原生窗口渲染：双栏、标题与中文输入/预览无重叠；不代表已定义产品最小窗口策略 |
 | 真实中文输入与无障碍接口 | 现有 fcitx `shuangpin`：`n` → `ni` preedit，空格提交“你”，Ctrl+Z 撤销、Ctrl+Y 重做、Shift+Left 选择通过；AT-SPI 可读中文、可编辑状态和 0–1 选择范围。完整读屏体验尚未验收 |
-| Secret Service | 临时 session collection 的测试值写入/读取/删除通过，确认测试项清理；默认持久 collection 仍锁定，未解锁或读取已有凭据 |
+| GTK 键盘与运行时减弱动画 | Tab 从编辑区到预览，End 滚动长文，Shift+Tab 返回；切换进程内 GTK 动画设置，NSH 收到 `false → true → false` 的减弱动画状态。不等于完整读屏验收 |
+| Secret Service | `keyring 4.2.0` 探针在隔离 D-Bus、临时 XDG 目录和两个连续运行的守护进程中写入、跨进程/守护进程重启读取、删除并确认不存在；无 Secret Service 时探针仅在内存存取。用户的真实默认 collection 未解锁，应用会话未接入 |
 | 现有代理与配置 | 将原模块按路径编入临时隔离 Cargo harness，并复用根 lockfile 已解析的依赖，6 项测试通过：5 项原有配置测试，以及新增 strict 回归；无 tunnel 时 GET/CONNECT 均返回 503，受控目标未接到直连 |
 | 完整旧桌面测试 | 受环境阻塞：缺少 `webkit2gtk-4.1` 与 `javascriptcoregtk-4.1`；隔离核心测试不能代替全程序构建 |
 
@@ -294,9 +295,9 @@ HTTPS 与 QUIC 的证书分别配置和续期，TLS 代理不会自动替 QUIC �
 
 ### 剩余关卡
 
-1. NSH 0.5.1 的 `a kept row is gone` 已在独立 `input + TextView` 夹具复现：一次连续输入产生 5 条错误；每字符等待后输入为 0。线索在 `element/flow.rs::keep_row`：保留行没有附带 owner，队列中的过时 Keep 在行 owner 释放后仍进入 reconciliation。在临时 NSH 副本中为 Keep 附带行 owner 后，同一连续输入测试为 0 错误且内容断言通过。本地候选补丁在 `.nsh/p0-keep-row-candidate.patch`；尚未通过 NSH 全套回归或评估每行快路径的性能影响，不直接修改已安装包、不引入 vendor/fork。现有 headless 测试仍保留警告，P0 不据此宣称完全通过。
-2. 已验证真实组合输入、撤销/重做、选择与 AT-SPI 文本；继续完整键盘遍历、读屏使用和原生 reduced-motion 切换验收。Ctrl+Shift+Z 本机未触发重做，Ctrl+Y 可用；记录平台实际快捷键。
-3. 默认持久 Secret Service collection 的 `Locked` 为 true。session collection 的测试值生命周期已验证；仍需以选定会话模块/SDK 验证持久凭据和不可用时的内存回退。临时 collection 成功不代表跨应用重启持久化通过。
+1. 官方 NSH 0.6.0 优化了保留行快路径，但独立回归和应用 headless 快速输入均仍出现 5 次 `a kept row is gone`。隔离副本为 `RegionElement::Kept` 保留行 owner，跳过已释放的行；同一复现为 0 次，NSH core 单元测试 1,772 项通过、15 项忽略。补丁未进入项目或安装目录，仍需评估快路径性能和上游修复。
+2. 原生编辑/预览 Tab 往返、预览 End 滚动及动态减弱动画已验证；Orca 未安装，完整读屏仍未验收。前轮 Ctrl+Shift+Z 本机未触发重做，Ctrl+Y 可用。
+3. 已验证隔离持久凭据及探针内存回退；接入真实会话模块后再验证锁定、注销、失败提示和跨应用重启。不要读取或解锁用户现有凭据来测试。
 4. 确认 GitHub OAuth 是否作为首版登录方式，并确认实际 Turso 数据库引擎。环境无 `TURSO_*` / OAuth 集成变量，未连接真实数据库。已核对官方 SDK 分流；`turso_serverless` 稳定版为 `0.1.3`，事务/并发一次性消费必须用选定引擎实测，尚不选择驱动或引入两套实现。
 
 P0 尚未整体通过；本轮未创建外部数据库/OAuth 资源、未推送或开始公网部署。P1 workspace/协议/服务拆分等待上述关卡处理。

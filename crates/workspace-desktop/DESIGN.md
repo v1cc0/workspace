@@ -2,7 +2,7 @@
 
 ## Scope and foundations
 
-P0 verifies a Linux desktop Markdown editing surface in Rust NSH 0.5.1. The primary task is editing Chinese Markdown and reading its native preview. The draft belongs to `App` and lives only until the window closes; this probe does not open or save notes. The existing Dioxus entry remains the comparison baseline.
+P0 verifies a Linux desktop Markdown editing surface in Rust NSH 0.6.0. The primary task is editing Chinese Markdown and reading its native preview. The draft belongs to `App` and lives only until the window closes; this probe does not open or save notes. The existing Dioxus entry remains the comparison baseline.
 
 Use the NSH neutral semantic theme, recorded in `theme.json`, in light and dark. Background, foreground, muted, input, border and ring have their standard roles. Use platform UI typography; only the editing buffer uses monospace. Spacing follows the NSH scale. Two equal panes share a single header and have independent vertical scrolling. Linux is the only validated target for this phase; no mobile, web or TUI support is claimed.
 
@@ -13,11 +13,12 @@ Use the NSH neutral semantic theme, recorded in `theme.json`, in light and dark.
 | State change | Tool and token | Reduced motion |
 | --- | --- | --- |
 | Editor focus enters or leaves | Border-color transition, `instant` = 120 ms, ease-out | Duration zero |
+| Preview gets keyboard focus | Immediate theme focus ring. Arrow keys, Page Up/Down and Home/End use native scrolling | Native reduced-motion setting |
 | Preview changes while typing | No motion: keep reading position stable during frequent edits | Same |
 | Empty draft | Native input placeholder; empty preview remains in its labelled pane | Same |
 | Press/hover actions, selection navigation, popup, layout changes, drag release, loading | None: this probe has no application buttons, navigation, overlays or async loading | Same |
 
-Keyboard: Tab reaches the named editor and native preview content; text entry, selection, scrolling and undo belong to the native platform. The labelled panes retain their headings in either appearance. Do not rewrite input during composition.
+Keyboard: Tab moves from the named editor to the named preview scroll pane. Shift+Tab returns to the editor. Text entry, selection, scrolling and undo belong to the native platform. The labelled panes retain their headings in either appearance. Do not rewrite input during composition.
 
 ## Verification
 
@@ -27,6 +28,9 @@ Keyboard: Tab reaches the named editor and native preview content; text entry, s
 - A temporary native input harness observed real fcitx `shuangpin` preedit `n` → `ni`, then a space committed `你`; Ctrl+Z undid it and Ctrl+Y redid it. Shift+Left selected the character. AT-SPI reported the editor's labelled grouping, editable Chinese text and the selection range 0–1. This verifies the exposed interfaces, not the full experience in a screen reader.
 - The native window was resized to an actual 800×600 with font scale 1.5. Its own render-tree capture, `.nsh/p0-ime-small.png`, shows both panes, headings and the Chinese input/preview without overlap. The harness was removed, and input method/focus were restored. This supplements the original light/dark captures; it does not establish a product minimum-window policy.
 
+- In NSH 0.6.0, native GTK keys moved focus from the editor to the named preview (Tab), scrolled the preview (End), and returned to the editor (Shift+Tab). The focus ring is visible in both appearances (`.nsh/p0-nsh-0.6.0-focus-{light,dark}.png`); pane alignment, spacing and text hierarchy are unchanged. The default Wayland `nsh test` key driver does not exercise GTK Tab traversal; use real GTK input to check it.
+- Switching `gtk-enable-animations` inside the running probe changed NSH's `reduce_motion()` from `false` to `true` and back without restarting the window or changing global preferences. This checks the dynamic flag, not millisecond transition timing.
+
 | Finishing group | Evidence / remaining work |
 | --- | --- |
 | Radius, typography | Light/dark screenshots: shared theme radius, platform UI text, monospace editor, legible CJK, table and code text |
@@ -34,11 +38,11 @@ Keyboard: Tab reaches the named editor and native preview content; text entry, s
 | Color and surfaces | Screenshots: semantic neutral colors in both appearances; no floating or nested card surfaces |
 | Hover and pressed | No application press controls in this probe; native text-selection/link behavior still needs manual input review |
 | App `ui` / component standards | The only controls are the named native multiline input and the native preview, styled in one module using theme tokens |
-| Focus and other states | Accessible editor name, empty/re-entry flows and focused native capture verified; actual input, undo/redo and selection checked; broader keyboard traversal remains open |
-| Motion inventory | Preview stays in place on native buffer update; focus transition timing and runtime reduced-motion changes remain unverified on the native platform |
-| Accessibility, platforms and content | Real fcitx composition and AT-SPI text/selection verified; actual 800×600 and 150% text captured; full screen reader use and broader keyboard navigation remain open |
+| Focus and other states | Named editor and preview, empty/re-entry flows, real Tab / Shift+Tab and End scrolling checked; preview has a visible theme outline |
+| Motion inventory | Preview does not animate content replacement. Real GTK setting changes update the NSH reduced-motion flag; exact timing of the editor border transition was not measured |
+| Accessibility, platforms and content | Real fcitx composition and AT-SPI text/selection verified earlier; actual 800×600 and 150% text captured earlier; full Orca use remains open |
 
-The native runner previously logged `No IM module matching GTK_IM_MODULE=fcitx5 found`; the user has now installed `fcitx5-gtk` and WebKitGTK 6. Native editor tests and real composition pass with the process-local `GTK_IM_MODULE=fcitx`; no global environment is changed. Headless bulk typing still logs `a kept row is gone` in NSH 0.5.1 even though final content assertions pass. An independent input + TextView reproducer, without application styling, reports the same five errors; awaiting each character separately reports zero. In a temporary NSH copy, retaining the row owner on `Keep` filters disposed queued rows and removes all five errors in that reproducer. The candidate is preserved locally at `.nsh/p0-keep-row-candidate.patch`; it has not passed the NSH test suite or a performance review of the existing kept-row fast path, and is not applied to the app or installed dependencies. Keep this as an open P0 finding; final assertions and paced typing do not exclude defects during queued updates.
+Official NSH 0.6.0 still logs `a kept row is gone` five times in both the existing headless bulk-typing test and an independent input + TextView reproducer. In an isolated copy, carrying the row owner on `RegionElement::Kept` allows both the kept prefix and general matching code to reject disposed rows. The reproducer reported zero errors and all 1,772 enabled NSH core tests passed (15 ignored). The candidate is not applied to app dependencies, and its fast-path performance has not been measured. Do not treat paced typing or final content assertions as a fix.
 
 ## Browser feasibility component (inventory before implementation)
 

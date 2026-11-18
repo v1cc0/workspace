@@ -33,11 +33,14 @@ pub fn editor(draft: Signal<String>) -> impl IntoElement {
 pub fn preview(draft: Signal<String>) -> impl IntoElement {
     scroll()
         .test_id("markdown-preview")
+        .focusable(true)
+        .label("Markdown 预览")
         .flex_1()
         .min_h_0()
         .border_1()
         .border_color(move || theme().border)
         .rounded(move || theme().radius)
+        .focus_visible(|s| s.outline(px(2.0)).outline_color(move || theme().primary))
         .child(
             text_view()
                 .markdown(move || Some(SharedString::from(draft.get())))

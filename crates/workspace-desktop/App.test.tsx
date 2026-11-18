@@ -20,7 +20,7 @@ test("long drafts remain editable with reduced motion in a small dark window", a
   await app.clear("label:Markdown 编辑器");
   await app.type("label:Markdown 编辑器", draft);
   expect(app.value("id:markdown-editor")).toBe(draft);
-  await app.scroll("id:markdown-preview", 2000);
+  await app.scroll("label:Markdown 预览", 2000);
   await app.clear("id:markdown-editor");
   await app.type("id:markdown-editor", "长文后继续编辑");
   await app.waitFor("id:markdown-preview >> text:长文后继续编辑");
