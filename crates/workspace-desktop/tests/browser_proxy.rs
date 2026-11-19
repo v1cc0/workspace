@@ -1,8 +1,7 @@
 #![cfg(target_os = "linux")]
 
-#[allow(dead_code)]
-#[path = "../../../src/backend.rs"]
-mod backend;
+#[path = "support/proxy.rs"]
+mod proxy;
 
 use std::{
     net::SocketAddr,
@@ -175,7 +174,7 @@ struct Network {
     http: SocketAddr,
     https: SocketAddr,
     proxy: SocketAddr,
-    tunnel: backend::TunnelState,
+    tunnel: proxy::TunnelState,
     client: Endpoint,
     server: Endpoint,
     proxy_task: tokio::task::JoinHandle<anyhow::Result<()>>,
@@ -301,15 +300,12 @@ impl Network {
             roots,
         ))?);
         let connection = client.connect(server.local_addr()?, "localhost")?.await?;
-        let tunnel = backend::TunnelState::default();
+        let tunnel = proxy::TunnelState::default();
         tunnel.set(Some(connection)).await;
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let proxy = listener.local_addr()?;
-        let proxy_task = tokio::spawn(
-            backend::LocalProxy::new(0, tunnel.clone())
-                .with_direct_fallback(false)
-                .serve(listener),
-        );
+        let proxy_task =
+            tokio::spawn(proxy::LocalProxy::new(tunnel.clone(), false).serve(listener));
         Ok(Self {
             http,
             https,

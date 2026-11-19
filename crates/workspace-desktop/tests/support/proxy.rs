@@ -23,35 +23,19 @@ impl TunnelState {
     pub async fn get(&self) -> Option<Connection> {
         self.inner.read().await.clone()
     }
-
-    pub async fn get_rtt(&self) -> Option<Duration> {
-        self.inner.read().await.as_ref().map(|c| c.rtt())
-    }
 }
 
 pub struct LocalProxy {
-    port: u16,
     tunnel: TunnelState,
     direct_fallback: bool,
 }
 
 impl LocalProxy {
-    pub fn new(port: u16, tunnel: TunnelState) -> Self {
+    pub fn new(tunnel: TunnelState, direct_fallback: bool) -> Self {
         Self {
-            port,
             tunnel,
-            direct_fallback: true,
+            direct_fallback,
         }
-    }
-
-    pub fn with_direct_fallback(mut self, enabled: bool) -> Self {
-        self.direct_fallback = enabled;
-        self
-    }
-
-    pub async fn run(self) -> anyhow::Result<()> {
-        let listener = TcpListener::bind(format!("127.0.0.1:{}", self.port)).await?;
-        self.serve(listener).await
     }
 
     pub async fn serve(self, listener: TcpListener) -> anyhow::Result<()> {
@@ -421,7 +405,7 @@ mod tests {
         let address = origin.local_addr()?;
         let proxy = TcpListener::bind("127.0.0.1:0").await?;
         let proxy_address = proxy.local_addr()?;
-        let proxy_task = tokio::spawn(LocalProxy::new(0, TunnelState::default()).serve(proxy));
+        let proxy_task = tokio::spawn(LocalProxy::new(TunnelState::default(), true).serve(proxy));
         let origin_task = tokio::spawn(async move {
             let (mut socket, _) = origin.accept().await?;
             let mut request = Vec::new();

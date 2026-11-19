@@ -17,28 +17,15 @@ English scope: Replace the current desktop GUI with a Rust Native Shell (NSH) ap
 
 首版使用 GitHub OAuth 登录。Workspace 服务端验证身份，Turso 保存 Workspace 用户和可撤销会话。独立开发 OAuth 服务已部署在 Cloudflare Pages，据用户实测，GitHub 和 Google 登录均可用。Workspace 首版验收范围为 GitHub。笔记保留本地，未登录或服务不可达时仍可编辑。
 
-## 2. 已核实的现状
+## 2. 当前构建入口
 
-| 位置 | 当前行为 | 对迁移的影响 |
-| --- | --- | --- |
-| `Cargo.toml`、`src/ui/mod.rs` | 实际界面是 Dioxus Desktop；`GPUI_knowledge.md` 是参考文档 | 本次迁移对象是 Dioxus；无需设计不存在的 GPUI 组件兼容层 |
-| `src/main.rs` | 同一二进制通过 `--server` 切换桌面端和 QUIC 服务端 | 当前服务端构建仍带 GUI 依赖，必须真正拆包 |
-| `src/server.rs` | 监听 UDP 3000，接收目标地址并转发 TCP；无用户鉴权 | 公网部署前必须增加认证、目标访问策略和资源限制 |
-| `src/client.rs`、`src/backend.rs` | 本地代理监听 `127.0.0.1:8080`；QUIC 断线重连；可回退直连 | 复用传输逻辑，但把生命周期和错误状态从 GUI 中分离 |
-| `src/quic_utils.rs` | 每次启动生成自签名证书；客户端跳过证书及握手签名验证 | 不能用于生产，必须改为真实服务端身份校验 |
-| `src/client.rs::start_browser_window` | Linux 专用 GTK3/Wry 窗口，依赖 Dioxus 已初始化 GTK | 不能直接移入 NSH 的 GTK4 进程 |
-| `src/ui/mod.rs::MarkdownWorkspace` | 读取 `notes/`，输入时直接写文件，忽略读写错误 | 提取笔记逻辑时必须补齐错误反馈和安全保存，防止静默丢失数据 |
-| `src/ui/mod.rs::MarkdownRenderer` | `pulldown-cmark` 生成 HTML，依赖 DOM 注入预览 | 优先验证 NSH 原生 Markdown 展示；受控 WebView 为备选 |
-| `src/config.rs` | 原子保存配置；支持 IP/端口及 CLI、环境变量覆盖；已有测试 | 保留原子写入与覆盖顺序，增加 HTTPS API URL、QUIC 主机名和旧配置迁移 |
-| `src/ui/mod.rs::SettingsView` | 已有可保存的设置页，重启应用生效 | 原进度文件中的“设置页仍为空”已过时，迁移要保留现有能力 |
+根目录 `cargo build --release` 和 `cargo run` 默认选择 `crates/workspace-desktop`。桌面端使用 Rust NSH 0.6.0，Linux 用 GTK4 和 WebKitGTK 6。旧桌面与匿名 QUIC 入口已从工作树移除。旧功能和配置格式可在 Git 基线 `03c13ab` 中查阅。现有 `notes/` 和本地配置文件可供后续接入。
 
-`crates/workspace-server` 已提供可独立运行的登录 API 与数据库迁移，运行方法见 [服务端 README](crates/workspace-server/README.md)。规划时 Git 尚无提交。现已使用配置好的作者身份分别提交计划（`85f454b`）和现有源码基线（`03c13ab`）。本地笔记、配置、agent 说明与进度文件不纳入 Git。
-
-最初验证使用 NSH `0.5.1`，当时缺少 WebKitGTK 6。当前已安装 GTK4 `4.24.1` 与 WebKitGTK `2.54.2`，桌面 crate 已升级到官方 NSH `0.6.0`，并用匹配的 CLI 重跑验证。具体结果见第 13 节。
+`crates/workspace-server` 提供独立的登录 API 与数据库迁移。`cargo build --release -p workspace-server` 单独构建服务。运行方法见 [服务端 README](crates/workspace-server/README.md)。
 
 ## 3. 架构与依赖方向
 
-采用一个 Cargo workspace，三个职责明确的 crate；共享内容仅限 API 数据结构与 tunnel 协议，不额外引入通用 service/core 框架。
+Cargo workspace 现在包含桌面和服务端。实现首次共享协议时再创建协议 crate。
 
 | 单元 | 职责与依赖 |
 | --- | --- |
@@ -91,7 +78,7 @@ P0 按以下顺序验证：
 3. 使用受控 HTTP/HTTPS 测试站点与服务端计数，证明主页面、重定向、子资源、WebSocket（若支持）走相同路径；使用仅允许服务端访问的目标证明桌面端无法绕过 tunnel。检查目标域名在哪里解析，并记录 DNS、WebRTC、HTTP/3 的实际路由边界；普通 CONNECT 代理不等同于全设备隐私保护。
 4. 断开 QUIC 后，strict 模式必须停止请求，不能透明直连。只有用户明确选择 direct fallback 时才允许直连，并持续显示当前路径。
 
-GTK3 与 GTK4 不在同一进程混用。若应用自有 native component 在限定的验证阶段仍不可行，后备方案是临时独立的旧浏览器进程，使用其自己的事件循环和指定代理；该方案必须记录为过渡措施，不能声称已完成 NSH 浏览器迁移。不得用普通系统浏览器打开 URL 来替代受代理保护的浏览器。
+浏览器使用应用自有的 GTK4/WebKitGTK 6 原生组件和专用代理会话。
 
 ### Markdown 编辑与预览
 
@@ -177,7 +164,7 @@ Turso 查询发生在连接鉴权和周期复核，不在每个转发字节上�
 
 - Editor：Explorer、编辑区、预览和可恢复的折叠状态；文件列表采用虚拟列表与稳定路径身份。
 - Browser：地址输入、现有快捷入口、代理浏览窗口/区域、加载和失败状态。
-- Settings：API 地址、tunnel 目标、strict/direct fallback；保留配置校验与运行时覆盖规则。原 WebKit/GTK3 兼容选项在确认淘汰旧浏览器后再移除，不能照搬禁用 sandbox 的全局设置。
+- Settings：API 地址、tunnel 目标、strict/direct fallback。保留配置校验与运行时覆盖规则。
 - Account：登录、取消/重试、已登录身份、注销，以及过期/服务不可达状态。
 
 应用根拥有 session、tunnel 和 proxy 生命周期，页面只拥有页面状态。NSH signals 只在 engine 线程更新；Tokio 任务通过值/通道交接状态，不从网络线程直接修改 UI signal。组件切换不能重启 tunnel 或丢弃编辑草稿。
@@ -195,12 +182,12 @@ Turso 查询发生在连接鉴权和周期复核，不在每个转发字节上�
 | 阶段 | 工作 | 通过条件 |
 | --- | --- | --- |
 | P0：建立基线与可行性验证 | 配置提交身份后保存当前源码基线；记录现有测试与行为；收敛登录方式；验证 NSH 编辑/预览、GTK4 代理路径、系统 keyring、Turso 引擎与事务 | 真实 NSH 窗口可编辑中文；HTTP/HTTPS 受控流量走代理且 strict 不泄漏；选定登录方式和数据库 SDK；形成可执行的 browser 方案 |
-| P1：拆出独立服务与协议 | 建立 Cargo workspace；移动服务器、协议、桌面代理职责；保留现有 Dioxus 桌面入口以便对照 | `workspace-server` 可在无 GTK/WebKit 的环境单独 build/test/start；既有代理功能通过端到端验证；新协议客户端/服务端配套测试 |
+| P1：接通独立服务与协议 | 在 Cargo workspace 中接通服务端、协议和桌面代理 | `workspace-server` 可在无 GTK/WebKit 的环境单独 build/test/start；既有代理功能通过端到端验证；新协议客户端/服务端配套测试 |
 | P2：Turso 与登录 API | 建表迁移、OAuth、短期登录流程、opaque sessions、注销、健康检查 | 登录→重启服务→验证会话→注销链路成立；并发兑换最多一个成功；过期/replay/错误 verifier/数据库不可用不产生授权 |
 | P3：收紧 QUIC 与代理 | TLS 身份校验、首流鉴权、撤销、目标策略、限流、超时、重连与取消；先用 Rust 测试客户端验证 | 匿名/无效会话不能建目标流；错误证书被拒绝；注销关闭已有流；私网和 DNS rebinding 用例被拒绝；strict 无直连 |
 | P4：NSH 基础与账号接入 | 生成 Rust NSH app，建立主题/控件/状态桥，接通账号和 tunnel 状态 | 登录/退出/过期/断网有真实状态；切页不重复启动任务；浅色/深色、键盘及生命周期检查通过 |
 | P5：逐页迁移 | 提取安全的 notes 服务，迁移 Editor、预览、Browser、Settings；执行旧配置迁移 | 现有功能对照表全部通过；笔记失败保存不丢稿；快捷入口传入正确 URL；真实浏览器经鉴权 tunnel 访问 |
-| P6：替换发布入口与部署 | 默认入口切换 NSH；删除已无调用的 Dioxus、GTK3/Wry 和旧 CSS；完善独立服务构建、部署、备份/恢复说明 | NSH 桌面包在干净 Linux 环境运行；服务端无 GUI 依赖；云端登录+tunnel 实测；回退与 Turso 恢复演练通过 |
+| P6：发布与部署 | 完善独立服务构建、部署、备份和恢复说明 | NSH 桌面包在干净 Linux 环境运行；服务端无 GUI 依赖；云端登录+tunnel 实测；回退与 Turso 恢复演练通过 |
 
 P1/P2 的中间版本只用于本地或隔离环境；在 P3 鉴权、证书与出口限制通过前不开放公网。旧客户端不会兼容新认证协议，需明确版本拒绝和配套升级，不能临时开放匿名连接来兼容。
 
@@ -208,7 +195,7 @@ P1/P2 的中间版本只用于本地或隔离环境；在 P3 鉴权、证书与�
 
 ## 10. 必要测试与交付证据
 
-复用 `src/config.rs` 的现有测试，按风险添加少量有区分力的测试，不为每个 UI 样式写镜像测试。
+从历史基线 `03c13ab` 核对旧配置兼容规则。为新的配置实现添加有区分力的测试。
 
 - 协议/代理：分段输入、越界帧、IPv6、HTTP absolute-form 转 origin-form、CONNECT 后残留 payload、并发流、超时、半关闭、大数据双向传输及 strict/fallback 的不同结果。
 - 认证/Turso：稳定 GitHub ID 关联、一次性 state 与流程、并发消费、会话 hash、过期/撤销、事务回滚、真实 schema 升级、数据库故障。
@@ -252,7 +239,7 @@ P0 尚待解决 NSH 批量 Markdown 更新的行生命周期缺陷，实测完�
 
 - 计划与旧源码已分别提交，旧 Dioxus/GTK3 入口可单独回退；源码基线为 `03c13ab`。
 - `crates/workspace-desktop` 来自官方 `nsh init --template rust`，保留 manifest、native module、root 与平台 runner 接线；项目 crates 和本轮验证使用的 CLI 均为稳定版 `0.6.0`。
-- 该 crate 暂时保留独立 `[workspace]`，在 P1 才合并根 Cargo workspace；它不替换原桌面入口。
+- `crates/workspace-desktop` 是根 workspace 的默认成员。桌面和登录服务共用根 `Cargo.lock`。
 - 实现受控原生多行输入与原生 `TextView` Markdown 预览，已有语义主题和应用自有 `ui` 层。草稿仅在内存中；不读取或写入 `notes/`。预览链接只报告，图片以文字代替，避免验证窗口主动加载远端资源。
 
 ### 验证证据
@@ -263,15 +250,14 @@ P0 尚待解决 NSH 批量 Markdown 更新的行生命周期缺陷，实测完�
 | `nsh test crates/workspace-desktop` | 5 项通过：3 项 Rust 检查与 2 项 headless 编辑流程；需要显示会话的浏览器测试默认跳过，另行显式运行通过 |
 | `GTK_IM_MODULE=fcitx nsh test crates/workspace-desktop --target linux` | 2 项原生流程通过；输入模块缺失警告已消除 |
 | 显式运行所有 Rust 测试（含原生浏览器） | 4 项通过：URL 校验、HTTP 转发回归、无 tunnel 的 strict GET/CONNECT、真实 WebKit/QUIC 路由与断连检查 |
-| 定向 fmt / Clippy | 新 NSH crate 的 `cargo fmt --check` 与 Clippy `-D warnings` 通过；旧源码其他文件的既有格式差异未混入本轮修改 |
-| 原生 Linux 窗口 | `cargo run --manifest-path crates/workspace-desktop/Cargo.toml` 可启动；GTK 原生编辑 buffer 更新后预览能更新 |
+| fmt 与 Clippy | NSH crate 的 `cargo fmt --check` 与 Clippy `-D warnings` 通过 |
+| 根构建与原生 Linux 窗口 | `cargo build --release` 成功。release 编辑窗口可启动。GTK 原生编辑 buffer 更新后预览能更新 |
 | 浅色/深色与小窗口 | 原始 `.nsh/p0-light.png`、`.nsh/p0-dark.png` 可见中文、表格、删除线、代码块。新增 `.nsh/p0-ime-small.png` 是实际 800×600、150% 字号的原生窗口渲染：双栏、标题与中文输入/预览无重叠；不代表已定义产品最小窗口策略 |
 | 真实中文输入与无障碍接口 | 现有 fcitx `shuangpin`：`n` → `ni` preedit，空格提交“你”，Ctrl+Z 撤销、Ctrl+Y 重做、Shift+Left 选择通过；AT-SPI 可读中文、可编辑状态和 0–1 选择范围。完整读屏体验尚未验收 |
 | GTK 键盘与运行时减弱动画 | Tab 从编辑区到预览，End 滚动长文，Shift+Tab 返回；切换进程内 GTK 动画设置，NSH 收到 `false → true → false` 的减弱动画状态。不等于完整读屏验收 |
 | Secret Service | `keyring 4.2.0` 探针在隔离 D-Bus、临时 XDG 目录和两个连续运行的守护进程中写入、跨进程/守护进程重启读取、删除并确认不存在；无 Secret Service 时探针仅在内存存取。用户的真实默认 collection 未解锁，应用会话未接入 |
 | 原生 Turso 本地文件 | `turso 0.8.3` 临时库用 8 个连接并发兑换同一流程。`BEGIN IMMEDIATE` 事务内条件更新并插入会话，共提交 1 条会话，重新打开数据库后仍可读。唯一约束冲突后回滚，第二个流程仍未消费。每个连接启用外键检查，测试确认无效用户引用被拒绝 |
-| 现有代理与配置 | 将原模块按路径编入临时隔离 Cargo harness，并复用根 lockfile 已解析的依赖，6 项测试通过：5 项原有配置测试，以及新增 strict 回归；无 tunnel 时 GET/CONNECT 均返回 503，受控目标未接到直连 |
-| 完整旧桌面测试 | 受环境阻塞：缺少 `webkit2gtk-4.1` 与 `javascriptcoregtk-4.1`；隔离核心测试不能代替全程序构建 |
+| 本地代理回归 | HTTP 转发保留请求内容。strict 模式在无 tunnel 时为 GET 和 CONNECT 返回 503，受控目标未收到连接 |
 
 ### 浏览器集成的确定方向
 
@@ -279,7 +265,7 @@ P0 尚待解决 NSH 批量 Markdown 更新的行生命周期缺陷，实测完�
 
 应用自有 GTK4 native component 已实现于 `src/browser.rs`。`NetworkSession::new_ephemeral` 与显式 HTTP 代理设置先于 WebView 创建，`src` 保留调用方 URL，只允许 HTTP/HTTPS 导航。禁用 WebRTC 和 DNS prefetch；不把 token 或页面 bridge 暴露给网页。当前编辑窗口未添加浏览器页面，组件通过原生夹具验证。
 
-`tests/browser_proxy.rs` 使用现有 `src/backend.rs`、本机 QUIC 与仅允许夹具目标的 TCP 出口。实测 HTTP/HTTPS、重定向、CSS、SVG、脚本、fetch、WS/WSS 全部经过 QUIC；loopback URL 也没有绕过代理。服务端关闭 QUIC 后仍保留旧连接对象，再次请求 HTTP/HTTPS 时源站新增 TCP 连接数为零；停止本地代理后同样没有直连。测试 TLS 仅信任该临时 session 中的夹具证书和主机名，不修改系统信任或生产校验。
+`tests/browser_proxy.rs` 使用 `tests/support/proxy.rs`、本机 QUIC 与仅允许夹具目标的 TCP 出口。实测 HTTP/HTTPS、重定向、CSS、SVG、脚本、fetch、WS/WSS 全部经过 QUIC；loopback URL 也没有绕过代理。服务端关闭 QUIC 后仍保留旧连接对象，再次请求 HTTP/HTTPS 时源站新增 TCP 连接数为零；停止本地代理后同样没有直连。测试 TLS 仅信任该临时 session 中的夹具证书和主机名，不修改系统信任或生产校验。
 
 浏览器实测暴露并修正了共享代理的 HTTP/WS absolute-form 转发缺陷：转为源站需要的 origin-form，保留正文与 Upgrade，去掉 Proxy-Connection/Proxy-Authorization，普通 HTTP 使用一请求一连接。直连回退 POST 回归同时检查编码路径/查询、二进制正文和自定义头。此验证不代表系统全流量路由或公网服务安全验收。
 

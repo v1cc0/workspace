@@ -2,7 +2,7 @@
 
 ## Scope and foundations
 
-P0 verifies a Linux desktop Markdown editing surface in Rust NSH 0.6.0. The primary task is editing Chinese Markdown and reading its native preview. The draft belongs to `App` and lives only until the window closes; this probe does not open or save notes. The existing Dioxus entry remains the comparison baseline.
+P0 verifies a Linux desktop Markdown editing surface in Rust NSH 0.6.0. The primary task is editing Chinese Markdown and reading its native preview. The draft belongs to `App` and lives only until the window closes; this probe does not open or save notes. The repository launches this editor by default.
 
 Use the NSH neutral semantic theme, recorded in `theme.json`, in light and dark. Background, foreground, muted, input, border and ring have their standard roles. Use platform UI typography; only the editing buffer uses monospace. Spacing follows the NSH scale. Two equal panes share a single header and have independent vertical scrolling. Linux is the only validated target for this phase; no mobile, web or TUI support is claimed.
 

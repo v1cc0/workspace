@@ -1,6 +1,6 @@
 # Workspace 登录服务
 
-本地浏览器通过 `dev-oauth.pages.dev` 完成 GitHub 授权。`workspace-server` 使用原生 Turso 文件保存账号和 Workspace 会话。先在私有数据目录建库，再启动服务。
+本地浏览器通过 `dev-oauth.pages.dev` 完成 GitHub 授权。`workspace-server` 使用原生 Turso 文件保存账号和 Workspace 会话。从仓库根目录可以用 `cargo build --release --locked -p workspace-server` 单独构建服务。先在私有数据目录建库，再启动服务。
 
 ```sh
 cd crates/workspace-server
