@@ -1,6 +1,6 @@
 # NSH 迁移与独立 Workspace 服务计划
 
-状态：NSH Linux 编辑、真实中文 IME、键盘预览、浏览器经 QUIC 与隔离持久 keyring 探针已验证。P0 仍待 NSH 批量更新缺陷、完整读屏、应用会话接入、登录方式与真实 Turso 验证。
+NSH Linux 编辑、真实中文 IME、键盘预览、浏览器经 QUIC 与隔离持久 keyring 探针已验证。首版已选 GitHub OAuth 和原生 `turso`。P0 仍待 NSH 批量更新缺陷、完整读屏、应用会话接入与 OAuth 交接验证。
 
 English scope: Replace the current desktop GUI with a Rust Native Shell (NSH) application, and extract an independently buildable and deployable Rust server for authenticated QUIC tunneling and user login backed by TursoDB.
 
@@ -15,7 +15,7 @@ English scope: Replace the current desktop GUI with a Rust Native Shell (NSH) ap
 
 这里的 tunnel 沿用现有语义：浏览器 → 本地 HTTP/CONNECT 代理 → QUIC → 服务端 TCP 出口。它不是系统 VPN，也不包含反向端口暴露。
 
-首版建议使用单一 GitHub OAuth 登录：服务端验证身份，Turso 保存 Workspace 用户和可撤销会话。此项是产品建议，尚非用户已指定的登录方式；若要求邮箱密码，在 P0 收敛为另一套完整方案后再实现认证。笔记保留本地，不因登录而上传；未登录或服务不可达时，本地编辑仍可使用。
+首版使用 GitHub OAuth 登录。Workspace 服务端验证身份，Turso 保存 Workspace 用户和可撤销会话。独立开发 OAuth 服务已部署在 Cloudflare Pages，据用户反馈 GitHub 登录可用，Google OAuth 正在添加。Workspace 首版验收范围为 GitHub。笔记保留本地，未登录或服务不可达时仍可编辑。
 
 ## 2. 已核实的现状
 
@@ -32,7 +32,7 @@ English scope: Replace the current desktop GUI with a Rust Native Shell (NSH) ap
 | `src/config.rs` | 原子保存配置；支持 IP/端口及 CLI、环境变量覆盖；已有测试 | 保留原子写入与覆盖顺序，增加 HTTPS API URL、QUIC 主机名和旧配置迁移 |
 | `src/ui/mod.rs::SettingsView` | 已有可保存的设置页，重启应用生效 | 原进度文件中的“设置页仍为空”已过时，迁移要保留现有能力 |
 
-尚无登录、数据库、数据库迁移和部署配置。规划时 Git 尚无提交；现已使用配置好的作者身份分别提交计划（`85f454b`）和现有源码基线（`03c13ab`）。本地笔记、配置、agent 说明与进度文件不纳入 Git。
+Workspace 登录、数据库、迁移和部署配置待实现。规划时 Git 尚无提交；现已使用配置好的作者身份分别提交计划（`85f454b`）和现有源码基线（`03c13ab`）。本地笔记、配置、agent 说明与进度文件不纳入 Git。
 
 最初验证使用 NSH `0.5.1`，当时缺少 WebKitGTK 6。当前已安装 GTK4 `4.24.1` 与 WebKitGTK `2.54.2`，桌面 crate 已升级到官方 NSH `0.6.0`，并用匹配的 CLI 重跑验证。具体结果见第 13 节。
 
@@ -53,7 +53,7 @@ English scope: Replace the current desktop GUI with a Rust Native Shell (NSH) ap
 
 服务端在一个独立进程中承载 API 和 QUIC。首版部署一台支持 UDP 的 Linux VPS，HTTPS 反向代理将 API 请求送到仅绑定 loopback 的 Axum；QUIC UDP 端口直接暴露。NSH 的开发服务器只用于开发，不承担这些生产职责。
 
-Turso 的数据库 URL 和数据库访问 token 只出现在服务端环境配置中。桌面端只持有 Workspace 会话凭据。
+Workspace 服务端配置数据库文件路径。桌面端只持有 Workspace 会话凭据。
 
 建议的关键文件：
 
@@ -101,31 +101,29 @@ GTK3 与 GTK4 不在同一进程混用。若应用自有 native component 在限
 
 ## 5. 登录与会话设计
 
-### 建议首版：GitHub OAuth + 服务端会话
+### 首版 GitHub OAuth 与 Workspace 会话
 
-使用系统浏览器完成身份授权，使登录引导不依赖一个已经连通的 tunnel。GitHub OAuth 的 client secret 只在服务器，使用成熟 OAuth 库处理授权流程。以 GitHub 不变的用户 ID 关联账号，不以可变用户名或邮箱自动合并账号。
-
-建议流程：
+Workspace 采用开发网关的服务端接入方式。GitHub 将用户重定向到网关的 `/api/callback`，随后网关将用户送回 Workspace。把 Workspace 的完整 HTTPS 回调 URL 加入网关的 `ALLOWED_REDIRECT_URIS`。GitHub OAuth client secret 保存在网关。
 
 1. 桌面端生成随机 verifier，将 S256 challenge 发给服务端，取得短期 `flow_id`、登录 URL 和轮询间隔。
-2. 系统浏览器访问服务端登录 URL；服务端为 OAuth 跳转生成一次性 `state`，绑定发起授权的浏览器流程。回调校验 state、浏览器绑定、有效期和一次性消费条件。
-3. 服务端用授权码获取 GitHub 身份，创建或读取 Turso 用户，把该登录流程标记为可兑换；不持久保存无后续用途的 GitHub access token。
-4. 桌面端按间隔携带 verifier 轮询兑换；服务端校验 challenge，在事务中一次性消费流程并创建 Workspace 会话。URL、浏览器历史和 OAuth 回调中不携带 Workspace 长期会话凭据。
+2. 系统浏览器访问登录 URL。Workspace 服务端为本次 OAuth 流程生成并持有独立的 PKCE verifier 和一次性 `state`，绑定浏览器和登录流程，再跳转至网关的 `GET /api/login`。首版请求 `read:user`。
+3. Workspace 回调校验 `state`、浏览器绑定和有效期，并在票据签发后 60 秒内向固定网关地址发送 `POST /api/exchange`，提交 `code`、网关用的 `code_verifier` 和原始 `redirect_uri`。网关调用 GitHub `/user`，响应中的 `user` 可以为 `null`。服务端收到有效的数值 `user.id` 后才创建或读取 Turso 用户并标记流程可兑换。资料缺失时提示重试。Workspace 只保存自身的用户和会话。
+4. 桌面端按间隔携带自己的 verifier 轮询兑换。Workspace 校验 challenge，在事务中一次性消费流程并创建会话，通过兑换响应把会话凭据交给桌面端。
 5. 返回高熵随机 opaque session token；数据库只存 token hash。首版会话固定 7 天过期，过期后重新登录，暂不引入 refresh-token 体系。
 
-这是建议的 Workspace 登录交接设计，并非声称 GitHub 提供此轮询 API。登录流程有效期先设为 5 分钟；重复回调、重复兑换、错误 verifier、超时和取消必须有确定结果。只允许配置好的 OAuth 回调地址和提供方 URL，限制登录、轮询、回调的请求频率与载荷大小。
+Workspace 登录流程有效期先设为 5 分钟。重复回调、重复兑换、错误 verifier、超时和取消必须有确定结果。只允许配置好的 OAuth 回调地址和提供方 URL，限制登录、轮询、回调的请求频率与载荷大小。
 
 桌面端的会话保存在系统 keyring；token 只在会话模块中访问，不进入 `config.toml`、笔记、网页或日志。Linux 没有可用 Secret Service 时只使用内存会话，退出后重新登录。清除本地凭据时立即停止重连并关闭 QUIC；注销 API 失败要明确告知用户远端会话尚未撤销。
 
 ### 初版 API 合约
 
-下表是待实现的合约，不是现有接口：
+下表记录待实现的 Workspace 接口。
 
 | 接口 | 用途与关键约束 |
 | --- | --- |
 | `POST /v1/auth/flows` | 创建 verifier 绑定的短期登录流程；返回服务端登录 URL、有效期和轮询间隔 |
 | `GET /v1/auth/github/start` | 发起服务端 OAuth 跳转，校验对应流程 |
-| `GET /v1/auth/github/callback` | 验证 OAuth 回调，只标记流程完成，不向网页返回会话 token |
+| `GET /v1/auth/github/callback` | 校验网关回调并从服务端兑换票据，将已验证身份的流程标记为可兑换 |
 | `POST /v1/auth/flows/{id}/exchange` | verifier 兑换；pending、成功、过期、已消费状态明确 |
 | `GET /v1/me` | Bearer session 验证，返回当前 Workspace 用户 |
 | `POST /v1/auth/logout` | 撤销本次会话并关闭其活动 QUIC 连接；重复调用保持幂等 |
@@ -136,13 +134,7 @@ GTK3 与 GTK4 不在同一进程混用。若应用自有 native component 在限
 
 ## 6. TursoDB 的职责与表结构
 
-建议首版使用 Turso Cloud 的 Turso Database 引擎，通过服务端远程查询访问权威数据，不在客户端同步认证库。官方当前区分：
-
-- `turso_serverless`：远程访问 Turso Database。
-- `libsql` 的 `remote` feature：远程访问已有 libSQL 引擎数据库。
-- `turso` / `turso::sync`：本地数据库与显式同步；首版认证状态不采用该模式，以避免撤销和一次性消费受副本延迟影响。
-
-P0 必须确认实际创建或已有数据库的引擎，再选择对应最新稳定 SDK；若已有 libSQL 数据库则使用 `libsql`，不为换 SDK 迁移用户数据，也不同时维护两套驱动。Turso 数据库凭据认证与 Workspace 最终用户登录是两个不同层次，数据库 token 不能充当用户 session。
+首版使用 Turso Database 新引擎的原生 Rust crate `turso`。crates.io 索引确认当前最新稳定版为 `0.8.3`。Workspace 建库与接入待实现。单节点部署方案由 `workspace-server` 使用 `Builder::new_local` 打开持久磁盘上的数据库文件，作为认证状态的唯一来源。
 
 | 表 | 最少字段与约束 |
 | --- | --- |
@@ -151,7 +143,7 @@ P0 必须确认实际创建或已有数据库的引擎，再选择对应最新�
 | `login_flows` | `id`、`code_challenge`、OAuth state/browser binding 的 hash、状态、可空 `user_id`、`expires_at`、`consumed_at` |
 | `schema_migrations` | 已应用版本与应用时间 |
 
-使用参数化 SQL、索引和外键约束。唯一身份的建号冲突必须可重试；消费登录流程与创建会话必须是原子事务。P0 用实际选定 SDK 验证事务、条件更新、唯一约束和外键行为；不能靠先查后写保证一次性消费。
+使用参数化 SQL、索引和外键约束，每个数据库连接启用外键检查。唯一身份的建号冲突必须可重试。兑换时在同一事务中执行条件更新并创建会话，只有条件更新命中一行时才创建会话。
 
 数据库迁移是服务启动前显式执行的命令；先验 schema 版本，失败不启动对外服务。定期删除过期登录流程和超出保留期的会话。Turso 只保存认证元数据，不保存网页正文、逐包流量或本地 Markdown。
 
@@ -213,7 +205,7 @@ Turso 查询发生在连接鉴权和周期复核，不在每个转发字节上�
 
 P1/P2 的中间版本只用于本地或隔离环境；在 P3 鉴权、证书与出口限制通过前不开放公网。旧客户端不会兼容新认证协议，需明确版本拒绝和配套升级，不能临时开放匿名连接来兼容。
 
-首先实施的具体小任务是 P0：建立可回退基线、做最小 NSH 编辑/代理验证、确认登录方式与 Turso 连接行为。基线和编辑验证入口已建立，P1 仍以 P0 剩余关卡通过为前提。
+首次 P0 任务已建立可回退基线，并完成最小 NSH 编辑、代理和凭据验证。登录方式和 Turso SDK 已选定，P1 仍以 P0 剩余关卡通过为前提。
 
 ## 10. 必要测试与交付证据
 
@@ -231,9 +223,9 @@ P1/P2 的中间版本只用于本地或隔离环境；在 P3 鉴权、证书与�
 
 ## 11. 部署、升级与回退
 
-首版使用单节点服务和一个权威 Turso 库；不引入 Kubernetes、Redis、独立 auth 微服务或多节点会话撤销广播。服务端内存只保存活动连接映射及有上限的运行状态；持久会话在 Turso。
+首版使用单节点服务和一个权威 Turso 库。服务端内存只保存活动连接映射及有上限的运行状态，持久会话保存在服务所在主机的 Turso 文件中。备份和恢复需要覆盖该持久目录。
 
-服务配置包含 API bind/public URL、QUIC bind/TLS server name、证书与私钥路径、Turso URL/token、GitHub client ID/secret/固定 callback URL、出口与连接限制。提供不含真实值的配置示例；日志只记录必要的 user/session 标识和错误类别，不记录 token、授权码或完整敏感 URL。
+Workspace 服务配置包含 API bind/public URL、QUIC bind/TLS server name、证书与私钥路径、Turso 文件路径、OAuth 集成参数、出口与连接限制。GitHub client secret 由处理授权码的服务单独配置。配置示例使用示例值，日志仅记录必要的用户标识、会话标识和错误类别。
 
 HTTPS 与 QUIC 的证书分别配置和续期，TLS 代理不会自动替 QUIC 装载证书。开放 HTTPS/TCP 与 QUIC/UDP，对 API 内部端口保持 loopback；所选主机必须支持长期 UDP，纯 HTTP 函数平台不足以承载现有 tunnel。
 
@@ -250,10 +242,10 @@ HTTPS 与 QUIC 的证书分别配置和续期，TLS 代理不会自动替 QUIC �
 - [NSH Rust](https://nsh.dev/docs/rust.md)、[Coding Guides](https://nsh.dev/docs/coding-guides.md)、[Design Guides](https://nsh.dev/docs/design-guides.md)
 - [NSH WebView](https://nsh.dev/docs/web-view-and-video.md)、[Native Components](https://nsh.dev/docs/native-components.md)、[Linux](https://nsh.dev/docs/linux.md)
 - [NSH latest release](https://github.com/longbridge/nsh/releases/latest)
-- [Turso Rust quickstart：引擎与 SDK 对应关系](https://docs.turso.tech/sdk/rust/quickstart)
-- [Turso 数据库连接认证](https://docs.turso.tech/sdk/authentication)
+- [原生 `turso` crate 0.8.3](https://docs.rs/crate/turso/0.8.3)
+- [crates.io 的 `turso` 版本索引](https://index.crates.io/tu/rs/turso)
 
-尚待 P0：处理 NSH 批量 Markdown 更新的行生命周期缺陷；实测完整读屏和应用会话回退；确认登录方式及实际 Turso 引擎与事务行为。浏览器的精确 API、原生 Markdown 基本格式和受控 HTTP/HTTPS/WS 路由已有下节实测证据。部署域名、主机和 OAuth/Turso 凭据留到集成阶段配置；未创建外部资源。
+P0 尚待解决 NSH 批量 Markdown 更新的行生命周期缺陷，实测完整读屏、应用会话回退及 OAuth 交接。浏览器 API、原生 Markdown 基本格式和受控 HTTP/HTTPS/WS 路由的实测结果见下一节。
 
 ## 13. P0 已执行结果与剩余关卡
 
@@ -278,6 +270,7 @@ HTTPS 与 QUIC 的证书分别配置和续期，TLS 代理不会自动替 QUIC �
 | 真实中文输入与无障碍接口 | 现有 fcitx `shuangpin`：`n` → `ni` preedit，空格提交“你”，Ctrl+Z 撤销、Ctrl+Y 重做、Shift+Left 选择通过；AT-SPI 可读中文、可编辑状态和 0–1 选择范围。完整读屏体验尚未验收 |
 | GTK 键盘与运行时减弱动画 | Tab 从编辑区到预览，End 滚动长文，Shift+Tab 返回；切换进程内 GTK 动画设置，NSH 收到 `false → true → false` 的减弱动画状态。不等于完整读屏验收 |
 | Secret Service | `keyring 4.2.0` 探针在隔离 D-Bus、临时 XDG 目录和两个连续运行的守护进程中写入、跨进程/守护进程重启读取、删除并确认不存在；无 Secret Service 时探针仅在内存存取。用户的真实默认 collection 未解锁，应用会话未接入 |
+| 原生 Turso 本地文件 | `turso 0.8.3` 临时库用 8 个连接并发兑换同一流程。`BEGIN IMMEDIATE` 事务内条件更新并插入会话，共提交 1 条会话，重新打开数据库后仍可读。唯一约束冲突后回滚，第二个流程仍未消费。每个连接启用外键检查，测试确认无效用户引用被拒绝 |
 | 现有代理与配置 | 将原模块按路径编入临时隔离 Cargo harness，并复用根 lockfile 已解析的依赖，6 项测试通过：5 项原有配置测试，以及新增 strict 回归；无 tunnel 时 GET/CONNECT 均返回 503，受控目标未接到直连 |
 | 完整旧桌面测试 | 受环境阻塞：缺少 `webkit2gtk-4.1` 与 `javascriptcoregtk-4.1`；隔离核心测试不能代替全程序构建 |
 
@@ -298,6 +291,6 @@ HTTPS 与 QUIC 的证书分别配置和续期，TLS 代理不会自动替 QUIC �
 1. 官方 NSH 0.6.0 优化了保留行快路径，但独立回归和应用 headless 快速输入均仍出现 5 次 `a kept row is gone`。隔离副本为 `RegionElement::Kept` 保留行 owner，跳过已释放的行；同一复现为 0 次，NSH core 单元测试 1,772 项通过、15 项忽略。补丁未进入项目或安装目录，仍需评估快路径性能和上游修复。
 2. 原生编辑/预览 Tab 往返、预览 End 滚动及动态减弱动画已验证；Orca 未安装，完整读屏仍未验收。前轮 Ctrl+Shift+Z 本机未触发重做，Ctrl+Y 可用。
 3. 已验证隔离持久凭据及探针内存回退；接入真实会话模块后再验证锁定、注销、失败提示和跨应用重启。不要读取或解锁用户现有凭据来测试。
-4. 确认 GitHub OAuth 是否作为首版登录方式，并确认实际 Turso 数据库引擎。环境无 `TURSO_*` / OAuth 集成变量，未连接真实数据库。已核对官方 SDK 分流；`turso_serverless` 稳定版为 `0.1.3`，事务/并发一次性消费必须用选定引擎实测，尚不选择驱动或引入两套实现。
+4. 已对照开发网关源码 `9ada5f4` 确认回调和兑换合约。网关用模拟的 GitHub 和 Google 响应运行 6 项测试，全部通过。Workspace 的回调登记和端到端登录待验证。原生 `turso 0.8.3` 的本地事务已通过隔离验证，Workspace 建库、迁移和会话集成待实现。
 
-P0 尚未整体通过；本轮未创建外部数据库/OAuth 资源、未推送或开始公网部署。P1 workspace/协议/服务拆分等待上述关卡处理。
+P0 尚未整体通过。P1 workspace/协议/服务拆分等待上述关卡处理。
