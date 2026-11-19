@@ -1,21 +1,11 @@
 
-#agy
-.antigravitycli
-
-#codegraph
-.codegraph/
-
-# build output and local notes
-/target/
-.nsh/
-/notes/
-
 # packages
 node_modules/
 
 # local dev config
 .dev.vars
 .env
+.env.local
 config.toml
 .cargo-remote.toml
 
